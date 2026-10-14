@@ -1,0 +1,13 @@
+# Mac side. Install into the ears toolbox:
+#   python3 -m venv ~/jarvis-ears-env && source ~/jarvis-ears-env/bin/activate && pip install -r requirements.txt
+# (ESPHome lives in its own venv: python3 -m venv ~/jarvis-env && pip install esphome)
+websockets>=13
+numpy
+sounddevice
+openwakeword>=0.6
+yt-dlp
+faster-whisper
+python-docx
+openpyxl
+pillow
+pillow-heif

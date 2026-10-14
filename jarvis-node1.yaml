@@ -1,0 +1,235 @@
+# Jarvis node 1 -- the desk board (ESP32 + WS2812B strip + DHT22 + PIR)
+# Secrets (WiFi, keys, passwords) live in secrets.yaml next to this file; that file is
+# never committed. Flash:  source ~/jarvis-env/bin/activate && esphome run jarvis-node1.yaml
+esphome:
+  name: jarvis-node1
+  friendly_name: Jarvis Desk
+  platformio_options:
+    upload_speed: 115200
+
+esp32:
+  board: esp32dev
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Jarvis-Node1 Setup"
+    password: !secret ap_password
+
+captive_portal:
+
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+globals:
+  - id: hum_base
+    type: float
+    initial_value: '-1'
+  # Motion rule memory (milliseconds since boot; 0 = never)
+  - id: last_motion_end
+    type: uint32_t
+    initial_value: '0'
+  - id: last_manual_off
+    type: uint32_t
+    initial_value: '0'
+  - id: auto_off_now
+    type: bool
+    initial_value: 'false'
+  - id: last_auto_wake
+    type: uint32_t
+    initial_value: '0'
+
+switch:
+  - platform: template
+    name: "Auto Wake"
+    id: auto_wake
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Motion Mode"
+    id: motion_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+script:
+  # Room empty for 10 minutes -> strip off (only if Motion Mode is on)
+  - id: sleep_timer
+    mode: restart
+    then:
+      - delay: 10min
+      - if:
+          condition:
+            lambda: 'return id(motion_mode).state && id(desk_strip).remote_values.is_on();'
+          then:
+            - lambda: 'id(auto_off_now) = true;'
+            - light.turn_off: desk_strip
+  - id: jarvis_wake
+    mode: restart
+    then:
+      - light.turn_on:
+          id: desk_strip
+          brightness: 100%
+          effect: "Jarvis Wake"
+      - delay: 5s
+      - light.turn_on:
+          id: desk_strip
+          effect: "Jarvis Idle"
+
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: WS2812
+    rgb_order: GRB
+    pin: GPIO5
+    num_leds: 60
+    name: "Desk Strip"
+    id: desk_strip
+    on_turn_off:
+      - lambda: |-
+          // Remember when YOU turned it off, so walking out doesn't turn it back on.
+          if (id(auto_off_now)) { id(auto_off_now) = false; }
+          else if (millis() > 30000) { id(last_manual_off) = millis(); }  // skip the off at boot
+    effects:
+      - pulse:
+          name: "Breathe"
+          transition_length: 2s
+          update_interval: 2s
+      - addressable_scan:
+          name: "Jarvis Scan"
+          move_interval: 20ms
+          scan_width: 8
+      - addressable_rainbow:
+          name: "Rainbow"
+      - addressable_lambda:
+          name: "Jarvis Idle"
+          update_interval: 33ms
+          lambda: |-
+            static uint32_t t = 0;
+            t++;
+            float breathe = 0.82f + 0.18f * (0.5f + 0.5f * sinf(t * 0.0105f));
+            for (int i = 0; i < it.size(); i++) {
+              float shimmer = 0.92f + 0.08f * sinf(i * 0.35f + t * 0.02f);
+              float k = breathe * shimmer;
+              it[i] = Color(0, (uint8_t)(70 * k), (uint8_t)(255 * k));
+            }
+      - addressable_lambda:
+          name: "Jarvis Wake"
+          update_interval: 16ms
+          lambda: |-
+            static uint32_t t = 0;
+            t++;
+            int n = it.size();
+            int half = n / 2;
+            uint32_t f = t % 240;
+            for (int i = 0; i < n; i++) it[i] = Color(0, 40, 160);
+            if (f < 40) {
+              int reach = f * half / 40;
+              for (int i = 0; i < reach; i++) {
+                it[half + i] = Color(190, 240, 255);
+                it[half - 1 - i] = Color(190, 240, 255);
+              }
+            } else {
+              int ff = f - 40;
+              int p = (ff % 100) * (n - 1) / 99;
+              bool fwd = ((ff / 100) % 2) == 0;
+              for (int k = 0; k < 10; k++) {
+                int q = fwd ? (p - k) : ((n - 1 - p) + k);
+                if (q >= 0 && q < n) {
+                  uint8_t v = 255 - k * 24;
+                  it[q] = Color((uint8_t)(v * 190 / 255), (uint8_t)(v * 240 / 255), v);
+                }
+              }
+            }
+
+# Clock from Home Assistant, for night mode
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# Night window for the walk-in wake. Change these in Home Assistant, no reflash needed.
+number:
+  - platform: template
+    name: "Night Starts"
+    id: night_start
+    optimistic: true
+    restore_value: true
+    initial_value: 23
+    min_value: 0
+    max_value: 23
+    step: 1
+    unit_of_measurement: "h"
+  - platform: template
+    name: "Night Ends"
+    id: night_end
+    optimistic: true
+    restore_value: true
+    initial_value: 8
+    min_value: 0
+    max_value: 23
+    step: 1
+    unit_of_measurement: "h"
+
+sensor:
+  - platform: dht
+    pin: GPIO4
+    model: DHT22
+    update_interval: 10s
+    temperature:
+      name: "Room Temperature"
+    humidity:
+      name: "Room Humidity"
+      on_value:
+        then:
+          - lambda: |-
+              if (id(hum_base) < 0) { id(hum_base) = x; return; }
+              if (x - id(hum_base) > 2.5f && id(auto_wake).state) {
+                id(jarvis_wake).execute();
+              }
+              id(hum_base) = id(hum_base) * 0.9f + x * 0.1f;
+
+binary_sensor:
+  - platform: gpio
+    pin: GPIO18
+    name: "Room Motion"
+    id: room_motion
+    device_class: motion
+    filters:
+      - delayed_on: 200ms   # ignore tiny glitches
+    on_press:
+      - script.stop: sleep_timer
+      - lambda: |-
+          // Walk-in rule: wake the strip only if
+          //  - Motion Mode is on
+          //  - it is not night (Night Starts .. Night Ends, set in Home Assistant)
+          //  - the strip is off
+          //  - the room was empty for 5+ minutes (you're arriving, not leaving)
+          //  - you didn't turn the strip off yourself in the last 15 minutes
+          //  - no auto-wake already happened in the last 30 minutes (cooldown)
+          uint32_t now = millis();
+          bool was_empty = id(last_motion_end) == 0 || (now - id(last_motion_end)) > 5UL * 60 * 1000;
+          bool not_just_off = id(last_manual_off) == 0 || (now - id(last_manual_off)) > 15UL * 60 * 1000;
+          auto t = id(ha_time).now();
+          int a = (int) id(night_start).state, b = (int) id(night_end).state;
+          bool night = t.is_valid() && (a > b ? (t.hour >= a || t.hour < b) : (t.hour >= a && t.hour < b));
+          // Cooldown: never auto-wake twice within 30 minutes.
+          bool not_recent_wake = id(last_auto_wake) == 0 || (now - id(last_auto_wake)) > 30UL * 60 * 1000;
+          if (id(motion_mode).state && !night && !id(desk_strip).remote_values.is_on() && was_empty && not_just_off && not_recent_wake) {
+            id(last_auto_wake) = now;
+            id(jarvis_wake).execute();
+          }
+    on_release:
+      - lambda: 'id(last_motion_end) = millis();'
+      - script.execute: sleep_timer

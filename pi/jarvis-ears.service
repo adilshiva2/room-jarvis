@@ -1,0 +1,17 @@
+# Jarvis ears as a service on the Pi: starts on boot, restarts if it crashes.
+# Install with pi/install-ears.sh (it copies this file into place).
+[Unit]
+Description=Jarvis ears (Hey Jarvis wake word -> Home Assistant)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=adil
+WorkingDirectory=/home/adil/jarvis
+ExecStart=/home/adil/jarvis-ears-env/bin/python3 /home/adil/jarvis/jarvis-ears.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,106 @@
+# Reference copy of the Home Assistant automations that make up Jarvis's voice layer.
+# These live in Home Assistant's own storage on the Pi (built in the UI); this file is
+# kept in sync by hand so the repo tells the whole story. Paste any block into
+# Settings -> Automations -> Create -> Edit in YAML to recreate it.
+
+# ---- Voice modes (Tier 0: free, instant) ----------------------------------------
+# One rule learned the hard way: light.turn_on accepts ONE color descriptor
+# (rgb_color OR color_temp_kelvin). Two in one call = validation error, the automation
+# stops before set_conversation_response, and Jarvis just says "Done".
+
+- alias: "Jarvis: movie mode"
+  mode: single
+  triggers:
+    - trigger: conversation
+      command: ["movie mode"]
+  actions:
+    - action: light.turn_on
+      target: {entity_id: light.jarvis_desk_desk_strip}
+      data: {brightness_pct: 20, rgb_color: [120, 0, 255], effect: "None"}
+    - set_conversation_response: "Movie mode, sir. Enjoy."
+
+- alias: "Jarvis: focus mode"
+  mode: single
+  triggers:
+    - trigger: conversation
+      command: ["focus mode"]
+  actions:
+    - action: light.turn_on
+      target: {entity_id: light.jarvis_desk_desk_strip}
+      data: {brightness_pct: 100, rgb_color: [255, 255, 255], effect: "None"}
+    - set_conversation_response: "Focus mode. Good luck, sir."
+
+- alias: "Jarvis: jarvis mode"
+  mode: single
+  triggers:
+    - trigger: conversation
+      command: ["jarvis mode"]
+  actions:
+    - action: light.turn_on
+      target: {entity_id: light.jarvis_desk_desk_strip}
+      data: {brightness_pct: 80, effect: "Jarvis Idle"}
+    - set_conversation_response: "At your service, sir."
+
+- alias: "Jarvis: good night"
+  mode: single
+  triggers:
+    - trigger: conversation
+      command: ["good night", "goodnight"]
+  actions:
+    - action: light.turn_off
+      target: {entity_id: light.jarvis_desk_desk_strip}
+    - action: switch.turn_off       # no walk-in wake while sleeping; say "turn on motion mode" in the morning
+      target: {entity_id: switch.bedroom_jarvis_desk_motion_mode}
+    - set_conversation_response: "Good night, sir."
+
+# ---- Task bridge (Tier 2: the agent on the Mac) ----------------------------------
+# "task {task}" captures everything after the word. The event is picked up by
+# jarvis-tasks.py over the websocket; the immediate reply closes the voice loop while
+# the agent works. Reply arrives later as spoken speech from the Mac.
+
+- alias: Jarvis task bridge
+  mode: queued
+  triggers:
+    - trigger: conversation
+      command: ["task {task}", "run a task {task}"]
+  actions:
+    - event: jarvis_task
+      event_data:
+        task: "{{ trigger.slots.task }}"
+    - set_conversation_response: "On it, sir. I shall report when it is done."
+
+# ---- Reel catcher (free) ---------------------------------------------------------
+# The "Reel to Jarvis" iOS shortcut POSTs {"url": ...} to /api/webhook/jarvis-reel-7g2k.
+# local_only means only devices on the home WiFi can hit it; the random id is the key.
+
+- alias: Jarvis reel catcher
+  mode: queued
+  triggers:
+    - trigger: webhook
+      webhook_id: jarvis-reel-7g2k
+      allowed_methods: [POST]
+      local_only: true
+  actions:
+    - event: jarvis_reel
+      event_data:
+        url: "{{ trigger.json.url }}"
+
+# Voice colour fix: "Hey Jarvis, set the strip to magenta" sends a colour but no effect.
+# On the board, a running effect (Jarvis Idle etc.) keeps repainting the LEDs, so the colour
+# never shows. When the colour changes while an effect is on, stop the effect.
+- alias: Jarvis strip - colour beats effect
+  description: A spoken colour wins over whatever effect is running on the desk strip.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: light.jarvis_desk_desk_strip
+      attribute: rgb_color
+  conditions:
+    - condition: template
+      value_template: >-
+        {{ trigger.to_state.attributes.rgb_color is not none
+           and trigger.to_state.attributes.effect not in [none, 'None', ''] }}
+  actions:
+    - action: light.turn_on
+      target: {entity_id: light.jarvis_desk_desk_strip}
+      data: {effect: "None"}

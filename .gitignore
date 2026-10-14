@@ -1,0 +1,19 @@
+# ---- secrets: never on GitHub ----
+secrets.yaml
+board-password.txt
+ha-token.txt
+anthropic-key.txt
+gmail-app-password.txt
+canvas-token.txt
+
+# ---- personal data and downloads ----
+study/
+backups/
+*.bak-*
+*.log
+
+# ---- build and tool output ----
+/.esphome/
+__pycache__/
+*.pyc
+.DS_Store
