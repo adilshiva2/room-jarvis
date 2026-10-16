@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS · Nucleus</title>
+<!--
+  Jarvis Nucleus: the room's face on the monitor.
+  Served by the bridge at http://localhost:8802/  (events arrive on ws://localhost:8803).
+  Open with ?demo=1 to see it move with nothing connected.
+  Keys:  F = fullscreen   D = demo once   /  = type to Jarvis   Esc = clear
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#03070d; --bg2:#071320; --fg:#d9f3ff; --dim:#5f8aa3; --dim2:#2f4a5e;
+  --cy:#4fd8ff; --cy2:#9cefff; --am:#ffb547; --vi:#b388ff; --gr:#50f0b4; --rd:#ff5a5a;
+  --line:rgba(79,216,255,.16); --line2:rgba(79,216,255,.34); --panel:rgba(5,16,27,.55);
+  --fd:'Orbitron',system-ui,sans-serif; --fb:'Rajdhani','Segoe UI',system-ui,sans-serif; --fm:'Share Tech Mono',ui-monospace,Menlo,monospace;
+  --acc:var(--cy);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--fg);font-family:var(--fb);overflow:hidden}
+body{background:
+  radial-gradient(1200px 700px at 50% 42%, #0a1c2d 0%, var(--bg) 62%),
+  var(--bg);}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(rgba(79,216,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(79,216,255,.045) 1px,transparent 1px);
+  background-size:64px 64px;mask-image:radial-gradient(ellipse at 50% 45%,#000 20%,transparent 75%);-webkit-mask-image:radial-gradient(ellipse at 50% 45%,#000 20%,transparent 75%)}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.14;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.35) 0 1px,transparent 1px 3px)}
+.app{position:relative;z-index:1;display:grid;height:100vh;grid-template-columns:minmax(260px,330px) 1fr minmax(260px,330px);grid-template-rows:62px 1fr 66px;gap:14px;padding:14px}
+/* ---------- top bar ---------- */
+.top{grid-column:1/4;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;border-bottom:1px solid var(--line);padding:0 6px 10px}
+.brand{display:flex;align-items:center;gap:14px}
+.brand .mark{width:34px;height:34px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;position:relative}
+.brand .mark::before{content:"";width:12px;height:12px;border-radius:50%;background:var(--acc);box-shadow:0 0 14px var(--acc),0 0 30px var(--acc);transition:background .5s,box-shadow .5s}
+.brand .mark::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px dashed var(--line2);animation:spin 14s linear infinite}
+.brand h1{font-family:var(--fd);font-weight:700;font-size:21px;letter-spacing:.42em;color:var(--cy2);text-shadow:0 0 18px rgba(79,216,255,.45)}
+.brand small{display:block;font-family:var(--fm);font-size:10px;letter-spacing:.3em;color:var(--dim);margin-top:2px}
+.status{justify-self:center;text-align:center}
+.status .word{font-family:var(--fd);font-weight:900;font-size:22px;letter-spacing:.38em;color:var(--acc);text-shadow:0 0 22px var(--acc);transition:color .4s,text-shadow .4s}
+.status .sub{font-family:var(--fm);font-size:11px;letter-spacing:.22em;color:var(--dim);margin-top:3px;min-height:14px}
+.clock{justify-self:end;text-align:right}
+.clock .t{font-family:var(--fd);font-size:26px;font-weight:500;letter-spacing:.14em;color:var(--cy2)}
+.clock .d{font-family:var(--fm);font-size:11px;letter-spacing:.22em;color:var(--dim);margin-top:2px}
+.links{display:flex;gap:14px;justify-content:flex-end;margin-top:4px;font-family:var(--fm);font-size:10px;letter-spacing:.18em;color:var(--dim)}
+.links i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim2);margin-right:6px;vertical-align:1px}
+.links i.on{background:var(--gr);box-shadow:0 0 8px var(--gr)}
+.links i.bad{background:var(--rd);box-shadow:0 0 8px var(--rd)}
+/* ---------- panels ---------- */
+.col{display:flex;flex-direction:column;gap:14px;min-height:0}
+.panel{position:relative;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(6px);padding:14px 16px;min-height:0;display:flex;flex-direction:column}
+.panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;border-color:var(--line2);border-style:solid;pointer-events:none}
+.panel::before{top:-1px;left:-1px;border-width:1px 0 0 1px}
+.panel::after{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
+.label{font-family:var(--fm);font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.label b{color:var(--acc);font-weight:400}
+.grow{flex:1}
+/* transcript */
+.feed{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:10px}
+.msg{font-size:17px;line-height:1.32;padding-left:12px;border-left:2px solid var(--dim2);animation:rise .35s ease-out;color:#bfe3f3}
+.msg small{display:block;font-family:var(--fm);font-size:10px;letter-spacing:.26em;color:var(--dim);margin-bottom:2px}
+.msg.you{border-color:var(--cy)}
+.msg.jarvis{border-color:var(--vi);color:#eadfff}
+.msg.sys{border-color:var(--dim2);color:var(--dim);font-size:14px}
+.ticker{font-family:var(--fm);font-size:11px;color:var(--dim);line-height:1.6;max-height:84px;overflow:hidden;border-top:1px solid var(--line);padding-top:8px;margin-top:10px}
+.ticker div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ticker div:first-child{color:#8fc2d8}
+/* centre */
+.centre{position:relative;display:flex;flex-direction:column;min-height:0}
+#stage{flex:1;position:relative;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;cursor:pointer}
+.task{height:116px;border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;justify-content:center;gap:10px;transition:opacity .4s}
+.task .name{font-family:var(--fd);font-size:13px;letter-spacing:.26em;text-transform:uppercase;color:var(--gr);text-align:center;min-height:16px}
+.stages{display:flex;align-items:center;justify-content:center;gap:0}
+.st{display:flex;flex-direction:column;align-items:center;gap:7px;width:118px;position:relative}
+.st .dot{width:12px;height:12px;border-radius:50%;border:1px solid var(--line2);background:transparent;transition:all .35s}
+.st .nm{font-family:var(--fm);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim2)}
+.st::before{content:"";position:absolute;top:6px;left:-50%;width:100%;height:1px;background:var(--line2);z-index:-1}
+.st:first-child::before{display:none}
+.st.done .dot{background:var(--gr);border-color:var(--gr);box-shadow:0 0 10px var(--gr)}
+.st.done .nm{color:#8ad9bf}
+.st.now .dot{background:var(--acc);border-color:var(--acc);box-shadow:0 0 14px var(--acc);animation:blink 1s ease-in-out infinite}
+.st.now .nm{color:var(--cy2)}
+.chips{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.chip{font-family:var(--fm);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);border:1px solid var(--line);padding:7px 12px;cursor:pointer;background:rgba(79,216,255,.03);transition:all .2s}
+.chip:hover{color:var(--cy2);border-color:var(--line2);box-shadow:0 0 14px rgba(79,216,255,.18)}
+/* right column */
+.big{font-family:var(--fd);font-size:46px;font-weight:500;color:var(--cy2);line-height:1;text-shadow:0 0 18px rgba(79,216,255,.35)}
+.big small{font-size:18px;color:var(--dim);margin-left:4px;font-family:var(--fm)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kv{font-family:var(--fm);font-size:12px;letter-spacing:.12em;color:var(--dim);display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line)}
+.kv b{color:#bfe3f3;font-weight:400;display:flex;align-items:center;gap:8px}
+.sw{width:14px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.2);background:#111;box-shadow:0 0 10px transparent;transition:all .4s}
+.pulse{width:9px;height:9px;border-radius:50%;background:var(--dim2)}
+.pulse.on{background:var(--am);box-shadow:0 0 10px var(--am);animation:blink 1.1s ease-in-out infinite}
+.queues{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.q{border:1px solid var(--line);padding:10px 12px;text-align:center}
+.q .n{font-family:var(--fd);font-size:30px;color:var(--cy2);line-height:1}
+.q .l{font-family:var(--fm);font-size:9.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--dim);margin-top:6px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{font-family:var(--fd);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--cy2);border:1px solid var(--line);padding:12px 8px;text-align:center;cursor:pointer;background:rgba(79,216,255,.03);transition:all .2s;user-select:none}
+.tile:hover{border-color:var(--line2);background:rgba(79,216,255,.09);box-shadow:0 0 18px rgba(79,216,255,.2)}
+.tile:active{transform:scale(.97)}
+.tile.run{color:var(--gr);border-color:rgba(80,240,180,.3)}
+.tile.run:hover{box-shadow:0 0 18px rgba(80,240,180,.25)}
+.tile.busy{opacity:.45;pointer-events:none}
+/* bottom */
+.bottom{grid-column:1/4;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
+.cmd{display:flex;align-items:center;gap:12px;border:1px solid var(--line);padding:0 14px;height:44px;background:rgba(5,16,27,.6)}
+.cmd span{font-family:var(--fm);color:var(--acc);font-size:14px}
+.cmd input{flex:1;background:none;border:0;outline:0;color:var(--fg);font-family:var(--fb);font-size:19px;letter-spacing:.03em}
+.cmd input::placeholder{color:var(--dim2)}
+.hint{font-family:var(--fm);font-size:10.5px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase;white-space:nowrap}
+.hint b{color:var(--cy);font-weight:400}
+.toast{position:fixed;left:50%;top:78px;transform:translateX(-50%);z-index:60;font-family:var(--fm);font-size:12px;letter-spacing:.14em;color:var(--cy2);border:1px solid var(--line2);background:rgba(3,7,13,.9);padding:8px 16px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{50%{opacity:.35}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (max-width:1180px){.app{grid-template-columns:240px 1fr 240px}.big{font-size:36px}.st{width:84px}.brand h1{font-size:17px}}
+@media (max-width:900px){.app{grid-template-columns:1fr;grid-template-rows:62px 1fr auto auto 66px}.col.l{display:none}.centre{min-height:46vh}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><div class="mark"></div><div><h1>J.A.R.V.I.S</h1><small>ROOM INTELLIGENCE · NODE 1 · BERKELEY</small></div></div>
+    <div class="status"><div class="word" id="word">STANDBY</div><div class="sub" id="sub">say "hey jarvis"</div></div>
+    <div class="clock"><div class="t" id="time">--:--:--</div><div class="d" id="date">—</div>
+      <div class="links"><span><i id="l-bridge"></i>BRIDGE</span><span><i id="l-ha"></i>HOME</span><span><i id="l-board"></i>BOARD</span><span><i id="l-mic"></i>MIC</span></div></div>
+  </header>
+
+  <aside class="col l">
+    <section class="panel grow">
+      <div class="label"><span>Transcript</span><b id="tcount"></b></div>
+      <div class="feed" id="feed"></div>
+      <div class="ticker" id="ticker"></div>
+    </section>
+  </aside>
+
+  <main class="centre">
+    <div id="stage"><canvas id="cv"></canvas></div>
+    <div class="task" id="task">
+      <div class="name" id="tname"></div>
+      <div class="stages" id="stages"></div>
+      <div class="chips" id="chips">
+        <div class="chip" data-say="what time is it">time</div>
+        <div class="chip" data-say="what is the room temperature">temperature</div>
+        <div class="chip" data-say="set the strip to magenta">magenta</div>
+        <div class="chip" data-say="set the strip to ice blue">ice blue</div>
+        <div class="chip" data-say="turn off the strip">strip off</div>
+      </div>
+    </div>
+  </main>
+
+  <aside class="col r">
+    <section class="panel">
+      <div class="label"><span>Room</span><b id="rage">—</b></div>
+      <div class="row2">
+        <div><div class="big" id="temp">--<small>°F</small></div><div class="kv" style="border:0;padding-top:4px">TEMP</div></div>
+        <div><div class="big" id="hum">--<small>%</small></div><div class="kv" style="border:0;padding-top:4px">HUMIDITY</div></div>
+      </div>
+      <div class="kv"><span>STRIP</span><b><i class="sw" id="sw"></i><span id="strip">—</span></b></div>
+      <div class="kv"><span>MOTION</span><b><i class="pulse" id="mot"></i><span id="mott">—</span></b></div>
+      <div class="kv"><span>MOTION MODE</span><b id="mm">—</b></div>
+      <div class="kv" style="border:0"><span>NIGHT</span><b id="night">—</b></div>
+    </section>
+    <section class="panel">
+      <div class="label"><span>Queues</span><b id="qlast"></b></div>
+      <div class="queues">
+        <div class="q"><div class="n" id="qreels">0</div><div class="l">reels waiting</div></div>
+        <div class="q"><div class="n" id="qshots">0</div><div class="l">screenshots</div></div>
+      </div>
+    </section>
+    <section class="panel grow">
+      <div class="label"><span>Actions</span></div>
+      <div class="tiles">
+        <div class="tile run" data-run="reel digest">Reel digest</div>
+        <div class="tile run" data-run="recruiting digest">Recruiting digest</div>
+        <div class="tile" data-say="jarvis mode">Jarvis mode</div>
+        <div class="tile" data-say="movie mode">Movie</div>
+        <div class="tile" data-say="focus mode">Focus</div>
+        <div class="tile" data-say="good night">Good night</div>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="bottom">
+    <div class="cmd"><span>&gt;_</span><input id="cmd" placeholder="Type to Jarvis… or say “Hey Jarvis”" autocomplete="off" spellcheck="false"></div>
+    <div class="hint"><b>F</b> fullscreen · <b>D</b> demo · <b>/</b> type · ears via <span id="src">bridge</span></div>
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+const $ = id => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+const DEMO = qs.get("demo") === "1";
+const WS_URL = qs.get("ws") || ("ws://" + (location.hostname || "localhost") + ":8803");
+
+/* ---------------- state ---------------- */
+const COL = { idle:[79,216,255], listening:[150,240,255], thinking:[255,181,71], speaking:[181,136,255], working:[80,240,180], error:[255,90,90] };
+const S = { state:"idle", col:[79,216,255], target:[79,216,255], level:0, levelRaw:0, pulse:0, ripples:[], progress:null, stages:[], stageIdx:-1,
+            spin:0, speed:1, busy:false, mic:false, t0:performance.now() };
+const WORD = { idle:"STANDBY", listening:"LISTENING", thinking:"THINKING", speaking:"SPEAKING", working:"WORKING", error:"ERROR" };
+const SUB  = { idle:'say "hey jarvis"', listening:"go ahead", thinking:"…", speaking:"", working:"task in progress", error:"see log" };
+
+function setState(s, sub){
+  if(!COL[s]) s = "idle";
+  S.state = s; S.target = COL[s];
+  S.speed = {idle:1, listening:2.2, thinking:3.4, speaking:1.8, working:2.6, error:0.6}[s];
+  $("word").textContent = WORD[s]; $("sub").textContent = sub != null ? sub : SUB[s];
+  const c = "rgb(" + COL[s].join(",") + ")";
+  document.documentElement.style.setProperty("--acc", c);
+  if(s === "listening") S.pulse = Math.max(S.pulse, 1);
+}
+
+/* ---------------- transcript + log ---------------- */
+let tcount = 0, typing = null;
+function addMsg(kind, text){
+  const feed = $("feed"), el = document.createElement("div");
+  el.className = "msg " + kind;
+  el.innerHTML = "<small>" + ({you:"YOU", jarvis:"JARVIS", sys:"SYSTEM"}[kind]) + "</small><span></span>";
+  feed.appendChild(el);
+  while(feed.children.length > 9) feed.removeChild(feed.firstChild);
+  const span = el.querySelector("span");
+  if(kind === "jarvis"){ // typewriter
+    if(typing) clearInterval(typing);
+    let i = 0; typing = setInterval(() => { span.textContent = text.slice(0, ++i); if(i >= text.length){ clearInterval(typing); typing = null; } }, 18);
+  } else span.textContent = text;
+  if(kind !== "sys") $("tcount").textContent = (++tcount) + " today";
+}
+function addLog(text){
+  const t = $("ticker"), d = document.createElement("div");
+  const now = new Date(); d.textContent = now.toTimeString().slice(0,8) + "  " + text;
+  t.insertBefore(d, t.firstChild);
+  while(t.children.length > 4) t.removeChild(t.lastChild);
+}
+function toast(text){ const el = $("toast"); el.textContent = text; el.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove("show"), 2200); }
+
+/* ---------------- task stages ---------------- */
+function showTask(name, stages, idx){
+  $("tname").textContent = name || "";
+  const box = $("stages"); box.innerHTML = "";
+  $("chips").style.display = stages && stages.length ? "none" : "flex";
+  (stages || []).forEach((s, i) => {
+    const el = document.createElement("div"); el.className = "st" + (i < idx ? " done" : i === idx ? " now" : "");
+    el.innerHTML = '<div class="dot"></div><div class="nm">' + s + "</div>"; box.appendChild(el);
+  });
+  S.stages = stages || []; S.stageIdx = idx;
+  S.progress = (stages && stages.length) ? Math.min(1, (idx + 0.5) / stages.length) : null;
+}
+function taskEvent(e){
+  if(e.phase === "start"){ S.busy = true; setBusy(true); showTask(e.name, e.stages, 0); setState("working", e.name); addLog("task: " + e.name); }
+  else if(e.phase === "stage"){ showTask(e.name || $("tname").textContent, e.stages || S.stages, e.index); if(S.state === "working") $("sub").textContent = (e.stages || S.stages)[e.index] || ""; }
+  else if(e.phase === "done"){ showTask(e.name || $("tname").textContent, e.stages || S.stages, (e.stages || S.stages).length); S.progress = 1;
+    setTimeout(() => { if(!S.busy){ showTask("", [], -1); } }, 6000); S.busy = false; setBusy(false); if(e.summary) addMsg("jarvis", e.summary); addLog("done: " + (e.summary || "").slice(0,80)); }
+  else if(e.phase === "error"){ S.busy = false; setBusy(false); setState("error", e.message || ""); addLog("error: " + (e.message || "")); setTimeout(() => setState("idle"), 5000); showTask("", [], -1); }
+}
+function setBusy(b){ document.querySelectorAll(".tile.run").forEach(t => t.classList.toggle("busy", b)); }
+
+/* ---------------- room ---------------- */
+function room(r){
+  if(r.temp != null) $("temp").innerHTML = Math.round(r.temp) + "<small>°F</small>";
+  if(r.hum != null) $("hum").innerHTML = Math.round(r.hum) + "<small>%</small>";
+  const sw = $("sw");
+  if(r.strip){
+    const on = r.strip.on, rgb = r.strip.rgb || [0,0,0];
+    sw.style.background = on ? "rgb(" + rgb.join(",") + ")" : "#111";
+    sw.style.boxShadow = on ? "0 0 12px rgb(" + rgb.join(",") + ")" : "0 0 10px transparent";
+    $("strip").textContent = on ? (r.strip.effect && r.strip.effect !== "None" ? r.strip.effect : "on") : "off";
+  }
+  $("mot").classList.toggle("on", !!r.motion); $("mott").textContent = r.motion ? "movement" : "still";
+  if(r.motion_mode != null) $("mm").textContent = r.motion_mode ? "ON" : "OFF";
+  if(r.night) $("night").textContent = r.night[0] + ":00 – " + r.night[1] + ":00";
+  $("rage").textContent = "live";
+  $("l-ha").className = r.ha === false ? "bad" : "on";
+  $("l-board").className = r.board === false ? "bad" : "on";
+  room.at = performance.now();
+}
+setInterval(() => { if(room.at && performance.now() - room.at > 45000){ $("rage").textContent = "stale"; $("l-ha").className = ""; } }, 5000);
+function queue(q){ if(q.reels != null) $("qreels").textContent = q.reels; if(q.shots != null) $("qshots").textContent = q.shots; if(q.last) $("qlast").textContent = q.last; }
+
+/* ---------------- events from the bridge ---------------- */
+function handle(e){
+  switch(e.type){
+    case "hello": if(e.room) room(e.room); if(e.queue) queue(e.queue); if(e.task) taskEvent(e.task); (e.log || []).forEach(addLog); if(e.state) setState(e.state); addLog("bridge " + (e.version || "") + " connected"); break;
+    case "state": setState(e.state, e.sub); break;
+    case "heard": addMsg("you", e.text); S.ripples.push({r:0, a:1}); setState("thinking"); break;
+    case "reply": addMsg("jarvis", e.text); break;
+    case "task": taskEvent(e); break;
+    case "room": room(e); break;
+    case "queue": queue(e); break;
+    case "log": addLog(e.text); break;
+    case "toast": toast(e.text); break;
+  }
+}
+
+/* ---------------- websocket ---------------- */
+let ws = null, wsTimer = null;
+function connect(){
+  try { ws = new WebSocket(WS_URL); } catch(err){ $("l-bridge").className = "bad"; return; }
+  ws.onopen = () => { $("l-bridge").className = "on"; $("src").textContent = "bridge"; };
+  ws.onclose = () => { $("l-bridge").className = ""; ws = null; clearTimeout(wsTimer); wsTimer = setTimeout(connect, 2500); };
+  ws.onerror = () => { $("l-bridge").className = "bad"; };
+  ws.onmessage = ev => { try { handle(JSON.parse(ev.data)); } catch(err){} };
+}
+function send(obj){
+  if(ws && ws.readyState === 1){ ws.send(JSON.stringify(obj)); return true; }
+  if(DEMO){ demoReply(obj); return true; }
+  toast("bridge not connected"); return false;
+}
+function say(text){ if(!text) return; addMsg("you", text); S.ripples.push({r:0, a:1}); setState("thinking"); send({type:"say", text}); }
+function run(task){ if(S.busy){ toast("one task at a time"); return; } addMsg("you", "task: " + task); send({type:"run", task}); }
+
+document.querySelectorAll("[data-say]").forEach(el => el.addEventListener("click", () => say(el.dataset.say)));
+document.querySelectorAll("[data-run]").forEach(el => el.addEventListener("click", () => run(el.dataset.run)));
+const cmd = $("cmd");
+cmd.addEventListener("keydown", ev => { if(ev.key === "Enter" && cmd.value.trim()){ const t = cmd.value.trim(); cmd.value = ""; if(/^task[: ]/i.test(t)) run(t.replace(/^task[: ]\s*/i, "")); else say(t); } if(ev.key === "Escape") cmd.blur(); });
+document.addEventListener("keydown", ev => {
+  if(document.activeElement === cmd) return;
+  if(ev.key === "/"){ ev.preventDefault(); cmd.focus(); }
+  if(ev.key.toLowerCase() === "f"){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); }
+  if(ev.key.toLowerCase() === "d") demo();
+});
+$("cv").addEventListener("click", () => { S.pulse = 1; S.ripples.push({r:0, a:1}); cmd.focus(); });
+
+/* ---------------- clock ---------------- */
+function tick(){ const n = new Date(); $("time").textContent = n.toTimeString().slice(0,8);
+  $("date").textContent = n.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"}).toUpperCase(); }
+setInterval(tick, 1000); tick();
+
+/* ---------------- microphone (the nucleus reacts to the room) ---------------- */
+let analyser = null, tdata = null;
+async function mic(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:true}});
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const srcNode = ac.createMediaStreamSource(stream);
+    analyser = ac.createAnalyser(); analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.6;
+    srcNode.connect(analyser); tdata = new Uint8Array(analyser.fftSize);
+    S.mic = true; $("l-mic").className = "on";
+    document.addEventListener("click", () => { if(ac.state === "suspended") ac.resume(); }, {once:true});
+  } catch(err){ $("l-mic").className = ""; addLog("mic: " + (err.name || "unavailable") + " (click the page, then allow)"); }
+}
+mic();
+
+/* ---------------- the nucleus ---------------- */
+const cv = $("cv"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function resize(){ const r = $("stage").getBoundingClientRect(); DPR = Math.min(2, window.devicePixelRatio || 1); W = r.width; H = r.height; cv.width = W * DPR; cv.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+window.addEventListener("resize", resize); resize();
+const RINGS = [ {tilt:0.45, k:0.38, n:22, dir:1}, {tilt:-0.9, k:0.33, n:16, dir:-1}, {tilt:1.95, k:0.30, n:12, dir:1} ];
+const rgba = (c, a) => "rgba(" + (c[0]|0) + "," + (c[1]|0) + "," + (c[2]|0) + "," + a + ")";
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const t = (now - S.t0) / 1000;
+  // colour drifts toward the state's colour
+  for(let i = 0; i < 3; i++) S.col[i] = lerp(S.col[i], S.target[i], 0.06);
+  // mic level
+  let lv = 0;
+  if(analyser){ analyser.getByteTimeDomainData(tdata); let sum = 0; for(let i = 0; i < tdata.length; i++){ const v = (tdata[i] - 128) / 128; sum += v * v; } lv = Math.min(1, Math.sqrt(sum / tdata.length) * 4.5); }
+  else { lv = (S.state === "listening" || S.state === "speaking") ? 0.25 + 0.2 * Math.abs(Math.sin(t * 7)) * Math.abs(Math.sin(t * 2.3)) : 0; }
+  S.levelRaw = lv; S.level = lerp(S.level, lv, lv > S.level ? 0.5 : 0.08);
+  S.pulse *= 0.94;
+  S.spin += 0.016 * S.speed;
+  const c = S.col, cx = W / 2, cy = H / 2 - 6;
+  const base = Math.min(W * 0.165, H * 0.165, (H / 2 - 26) / 2.55);  // outer ring stays inside the stage
+  const react = (S.state === "listening" || S.state === "speaking") ? S.level : S.level * 0.35;
+  const r = base * (1 + 0.28 * react + 0.22 * S.pulse + 0.02 * Math.sin(t * 1.7));
+  ctx.clearRect(0, 0, W, H);
+
+  // ambient glow
+  let g = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 3.2);
+  g.addColorStop(0, rgba(c, 0.22 + 0.25 * react)); g.addColorStop(0.5, rgba(c, 0.06)); g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // outer tech ring: ticks + rotating dashed arcs (becomes the progress ring during a task)
+  const R2 = base * 2.35;
+  ctx.save(); ctx.translate(cx, cy);
+  ctx.strokeStyle = rgba(c, 0.18); ctx.lineWidth = 1;
+  for(let i = 0; i < 60; i++){ const a = i * Math.PI / 30, L = i % 5 === 0 ? 10 : 4; ctx.beginPath(); ctx.moveTo(Math.cos(a) * (R2 + 8), Math.sin(a) * (R2 + 8)); ctx.lineTo(Math.cos(a) * (R2 + 8 + L), Math.sin(a) * (R2 + 8 + L)); ctx.stroke(); }
+  for(let k = 0; k < 3; k++){
+    ctx.beginPath(); ctx.lineWidth = k === 1 ? 3 : 1.2; ctx.strokeStyle = rgba(c, 0.28 + 0.1 * k);
+    ctx.setLineDash(k === 1 ? [40, 26] : [6, 14]); ctx.lineDashOffset = (k % 2 ? 1 : -1) * S.spin * (40 + k * 25);
+    ctx.arc(0, 0, R2 - k * 9, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  if(S.progress != null){
+    ctx.beginPath(); ctx.lineWidth = 5; ctx.lineCap = "round"; ctx.strokeStyle = rgba(COL.working, 0.9); ctx.shadowColor = rgba(COL.working, 0.9); ctx.shadowBlur = 16;
+    ctx.arc(0, 0, R2 + 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * S.progress); ctx.stroke(); ctx.shadowBlur = 0;
+    const n = S.stages.length;
+    for(let i = 0; i < n; i++){ const a = -Math.PI / 2 + Math.PI * 2 * ((i + 0.5) / n); const done = i < S.stageIdx, cur = i === S.stageIdx;
+      ctx.beginPath(); ctx.arc(Math.cos(a) * (R2 + 2), Math.sin(a) * (R2 + 2), cur ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = done || cur ? rgba(COL.working, 1) : rgba(c, 0.25); ctx.fill(); }
+  }
+  ctx.restore();
+
+  // orbit rings with particles (drawn back half first, core, then front half)
+  const orbits = RINGS.map((o, i) => {
+    const rx = r * 1.55 + i * base * 0.33, ry = rx * 0.34, rot = S.spin * o.dir * (0.9 + i * 0.25), pts = [];
+    for(let j = 0; j < o.n; j++){ const a = j * Math.PI * 2 / o.n + rot; const x0 = Math.cos(a) * rx, y0 = Math.sin(a) * ry;
+      const x = x0 * Math.cos(o.tilt) - y0 * Math.sin(o.tilt), y = x0 * Math.sin(o.tilt) + y0 * Math.cos(o.tilt);
+      pts.push({x: cx + x, y: cy + y, depth: Math.sin(a)}); }
+    return {o, rx, ry, pts};
+  });
+  function orbitPath(ob){ ctx.beginPath(); ctx.ellipse(cx, cy, ob.rx, ob.ry, ob.o.tilt, 0, Math.PI * 2); }
+  function particles(ob, front){
+    for(const p of ob.pts){ if((p.depth > 0) !== front) continue; const d = (p.depth + 1) / 2; const sz = 1.2 + 2.6 * d + 1.5 * react;
+      ctx.beginPath(); ctx.arc(p.x, p.y, sz, 0, Math.PI * 2); ctx.fillStyle = rgba(front ? [c[0]+60,c[1]+40,c[2]+30] : c, 0.35 + 0.6 * d); ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = front ? 12 : 4; ctx.fill(); }
+    ctx.shadowBlur = 0;
+  }
+  orbits.forEach(ob => { orbitPath(ob); ctx.strokeStyle = rgba(c, 0.14); ctx.lineWidth = 1; ctx.stroke(); particles(ob, false); });
+
+  // ripples (something was heard / clicked)
+  S.ripples = S.ripples.filter(p => p.a > 0.02);
+  for(const p of S.ripples){ p.r += 3.2 + r * 0.02; p.a *= 0.955; ctx.beginPath(); ctx.arc(cx, cy, r + p.r, 0, Math.PI * 2); ctx.strokeStyle = rgba(c, p.a * 0.7); ctx.lineWidth = 2; ctx.stroke(); }
+
+  // waveform halo
+  if(analyser && (S.state === "listening" || S.state === "speaking" || S.level > 0.12)){
+    ctx.beginPath(); const N = tdata.length, amp = 10 + 48 * S.level;
+    for(let i = 0; i <= N; i++){ const v = (tdata[i % N] - 128) / 128; const a = i / N * Math.PI * 2 - Math.PI / 2; const rr = r * 1.22 + v * amp; const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.closePath(); ctx.strokeStyle = rgba(c, 0.55); ctx.lineWidth = 1.5; ctx.shadowColor = rgba(c, 0.8); ctx.shadowBlur = 10; ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  // the core: plasma filaments under a glass sphere
+  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+  g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r); g.addColorStop(0, rgba([c[0]+120, c[1]+90, c[2]+60], 0.95)); g.addColorStop(0.45, rgba(c, 0.75)); g.addColorStop(1, rgba([c[0]*0.2, c[1]*0.25, c[2]*0.4], 0.95));
+  ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  ctx.globalCompositeOperation = "lighter";
+  const F = 28;
+  for(let i = 0; i < F; i++){ const a = i * Math.PI * 2 / F + Math.sin(t * 0.6 + i) * 0.35 + S.spin * 0.25 * (i % 2 ? 1 : -1);
+    const len = r * (0.35 + 0.55 * (0.5 + 0.5 * Math.sin(t * (1.3 + i * 0.07) + i * 1.7)) + 0.3 * react);
+    const x1 = cx + Math.cos(a) * len, y1 = cy + Math.sin(a) * len, cxp = cx + Math.cos(a + 0.5) * len * 0.5, cyp = cy + Math.sin(a + 0.5) * len * 0.5;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.quadraticCurveTo(cxp, cyp, x1, y1); ctx.strokeStyle = rgba([c[0]+80, c[1]+60, c[2]+40], 0.12 + 0.1 * react); ctx.lineWidth = 1.4; ctx.stroke(); }
+  // inner bright kernel
+  g = ctx.createRadialGradient(cx - r * 0.15, cy - r * 0.2, 0, cx, cy, r * 0.6); g.addColorStop(0, "rgba(255,255,255," + (0.85 + 0.15 * react) + ")"); g.addColorStop(0.3, rgba([c[0]+100, c[1]+80, c[2]+60], 0.5)); g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  ctx.globalCompositeOperation = "source-over";
+  // glass highlight + rim
+  g = ctx.createLinearGradient(cx, cy - r, cx, cy + r); g.addColorStop(0, "rgba(255,255,255,.22)"); g.addColorStop(0.5, "rgba(255,255,255,0)"); g.addColorStop(1, "rgba(0,0,0,.28)");
+  ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.strokeStyle = rgba([c[0]+90, c[1]+70, c[2]+50], 0.7); ctx.lineWidth = 1.5; ctx.shadowColor = rgba(c, 1); ctx.shadowBlur = 24 + 30 * react; ctx.stroke(); ctx.shadowBlur = 0;
+  // thinking: a fast inner scanner arc
+  if(S.state === "thinking"){ ctx.beginPath(); ctx.arc(cx, cy, r * 1.08, S.spin * 4, S.spin * 4 + 1.1); ctx.strokeStyle = rgba(c, 0.9); ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.stroke(); }
+
+  orbits.forEach(ob => particles(ob, true));
+}
+requestAnimationFrame(frame);
+
+/* ---------------- demo (nothing connected) ---------------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let demoRunning = false;
+async function demo(){
+  if(demoRunning) return; demoRunning = true; $("src").textContent = "demo";
+  room({temp:74.6, hum:51, strip:{on:true, rgb:[0,70,255], effect:"Jarvis Idle"}, motion:true, motion_mode:true, night:[23,8], ha:true, board:true});
+  queue({reels:5, shots:3});
+  handle({type:"state", state:"listening"}); await sleep(1800);
+  handle({type:"heard", text:"Set the strip to magenta."}); await sleep(1500);
+  handle({type:"reply", text:"The strip is now magenta, sir."}); handle({type:"state", state:"speaking"}); room({strip:{on:true, rgb:[255,0,255], effect:"None"}, motion:true}); await sleep(2600);
+  handle({type:"state", state:"idle"}); await sleep(2500);
+  handle({type:"state", state:"listening"}); await sleep(1500);
+  handle({type:"heard", text:"Task: recruiting digest."}); await sleep(1200);
+  const st = ["Collecting", "Reading", "Agent", "Writing", "Email", "Spoken"];
+  handle({type:"task", phase:"start", name:"recruiting digest (3 screenshots)", stages:st});
+  for(let i = 1; i < st.length; i++){ await sleep(1700); handle({type:"task", phase:"stage", index:i}); if(i === 2) handle({type:"log", text:"agent running (sonnet)…"}); if(i === 4) handle({type:"log", text:"emailed adilshiva2@gmail.com"}); }
+  await sleep(900);
+  handle({type:"task", phase:"done", summary:"Email sent, sir. 3 opportunities logged: Rillet, Autosana, Harvey; drafts ready."});
+  handle({type:"state", state:"speaking"}); await sleep(3200); handle({type:"state", state:"idle"});
+  demoRunning = false;
+}
+function demoReply(obj){ // typed commands while in demo mode
+  (async () => { await sleep(900); if(obj.type === "say"){ handle({type:"reply", text:"Done, sir."}); handle({type:"state", state:"speaking"}); await sleep(1500); handle({type:"state", state:"idle"}); }
+    if(obj.type === "run"){ const st = obj.task.startsWith("reel") ? ["Fetching", "Transcribing", "Agent", "Writing", "Email", "Spoken"] : ["Collecting", "Reading", "Agent", "Writing", "Email", "Spoken"];
+      handle({type:"task", phase:"start", name:obj.task, stages:st}); for(let i = 1; i < st.length; i++){ await sleep(1200); handle({type:"task", phase:"stage", index:i}); } handle({type:"task", phase:"done", summary:"Demo task complete, sir."}); handle({type:"state", state:"idle"}); } })();
+}
+
+if(DEMO){ setTimeout(demo, 1200); setInterval(() => { if(!demoRunning) demo(); }, 60000); }
+else connect();
+addLog("nucleus online");
+})();
+</script>
+</body>
+</html>

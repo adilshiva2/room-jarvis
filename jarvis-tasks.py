@@ -23,6 +23,13 @@ Folder map (~/jarvis-tasks):
   reels/       inbox.txt, archive.txt, work/ (transcripts), digests/
   recruiting/  voice-guide.md, resumes, tracker.csv, inbox/, drafts/, processed/, digests/
 
+The Nucleus (jarvis-nucleus.html) is the room's face on the monitor: this bridge
+serves it at http://localhost:8802/ and streams every moment to it over
+ws://localhost:8803 (listening, heard, reply, speaking, task stages, room
+telemetry, queues). The ears program POSTs its moments to /event here. Clicks and
+typed commands on the page come back the same way ("say" -> Home Assistant's
+Jarvis agent; "run" -> a task, exactly like saying it).
+
 Guardrails: the agent works inside its task folder only (it can read, write and
 edit files there without asking; web is read-only), 15-minute time limit, one
 task at a time, every task logged. Needs: ha-token.txt, anthropic-key.txt and
@@ -58,7 +65,10 @@ WHISPER_MODEL = "small.en"                  # local transcription model (downloa
 RECRUIT_DIR = TASKS_DIR / "recruiting"      # voice guide, resumes, tracker.csv, inbox/, drafts/, digests/
 _ICLOUD = pathlib.Path.home() / "Library/Mobile Documents/com~apple~CloudDocs"
 ICLOUD_PHOTO_DIRS = [_ICLOUD / "Shortcuts" / "Jarvis Photos", _ICLOUD / "Jarvis Photos"]
-PHOTO_PORT = 8802                            # phone -> Mac screenshot drop (LAN only)
+PHOTO_PORT = 8802                            # phone -> Mac screenshot drop + the Nucleus page + /event (LAN only)
+HUD_WS_PORT = 8803                           # Nucleus page <- live events (LAN only)
+AGENT_ID = "conversation.claude_conversation"  # the Jarvis conversation agent in Home Assistant (typed commands)
+ROOM_POLL = 8                                # seconds between room telemetry refreshes for the Nucleus
 EMAIL_TO = "adilshiva2@gmail.com"
 EMAIL_FROM = "adilshiva2@gmail.com"         # a Gmail address; needs an App Password (see guide)
 TASK_TIMEOUT = 15 * 60  # seconds
@@ -68,7 +78,9 @@ TTS_ENGINE = "tts.piper"
 # ------------------
 
 HERE = pathlib.Path(__file__).resolve().parent
+NUCLEUS_FILE = HERE / "jarvis-nucleus.html"
 HA_TOKEN = (HERE / "ha-token.txt").read_text().strip()
+VERSION = "v7"
 KEY_FILE = HERE / "anthropic-key.txt"
 GMAIL_PASS_FILE = HERE / "gmail-app-password.txt"
 
@@ -185,9 +197,99 @@ words, no markdown:
 SUMMARY: <N opportunities logged: company/role pairs; drafts ready>"""
 
 
+class Hub:
+    """Fan-out of live events to every open Nucleus page (and a snapshot for late joiners)."""
+
+    def __init__(self):
+        self.clients = set()
+        self.loop = None
+        self.snap = {"state": "idle", "queue": {}, "room": {}, "task": None, "log": []}
+
+    def emit(self, event: dict) -> None:  # safe from any thread
+        self._remember(event)
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self._broadcast, json.dumps(event))
+
+    def _remember(self, e: dict) -> None:
+        t = e.get("type")
+        if t == "state":
+            self.snap["state"] = e.get("state", "idle")
+        elif t == "queue":
+            self.snap["queue"].update({k: v for k, v in e.items() if k != "type"})
+        elif t == "room":
+            self.snap["room"] = {k: v for k, v in e.items() if k != "type"}
+        elif t == "task":
+            if e.get("phase") == "start":
+                self.snap["task"] = dict(e)
+            elif e.get("phase") == "stage" and self.snap["task"]:
+                self.snap["task"]["phase"] = "stage"
+                self.snap["task"]["index"] = e.get("index", 0)
+            else:
+                self.snap["task"] = None
+        elif t == "log":
+            self.snap["log"] = (self.snap["log"] + [e.get("text", "")])[-5:]
+
+    def _broadcast(self, raw: str) -> None:
+        for ws in list(self.clients):
+            asyncio.ensure_future(self._send(ws, raw))
+
+    async def _send(self, ws, raw: str) -> None:
+        try:
+            await ws.send(raw)
+        except Exception:
+            self.clients.discard(ws)
+
+    async def handler(self, ws, *_):
+        self.clients.add(ws)
+        try:
+            await ws.send(json.dumps({"type": "hello", "version": VERSION, **self.snap}))
+            async for raw in ws:
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                asyncio.ensure_future(hud_command(msg))
+        except Exception:
+            pass
+        finally:
+            self.clients.discard(ws)
+
+    async def serve(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        try:
+            await websockets.serve(self.handler, "", HUD_WS_PORT)
+            log(f"Nucleus ready: http://localhost:{PHOTO_PORT}/  (events on ws port {HUD_WS_PORT})")
+        except OSError as e:
+            log(f"(Nucleus events not started: {e})")
+
+
+HUB = Hub()
+TASK = {"name": "", "stages": []}   # the task in progress, for the Nucleus
+BUSY = threading.Lock()             # one task or typed command at a time
+
+
+def hud(**event) -> None:
+    HUB.emit(event)
+
+
+def stage(index: int) -> None:
+    """Light up stage `index` of the current task on the Nucleus."""
+    hud(type="task", phase="stage", name=TASK["name"], stages=TASK["stages"], index=index)
+
+
+def queue_counts() -> dict:
+    reels = 0
+    if REELS_INBOX.exists():
+        reels = len({l.split(None, 1)[-1] for l in REELS_INBOX.read_text().splitlines() if l.strip()})
+    inbox = RECRUIT_DIR / "inbox"
+    shots = sum(1 for f in inbox.iterdir() if f.is_file() and not f.name.startswith(".")) if inbox.exists() else 0
+    return {"reels": reels, "shots": shots}
+
+
 def log(msg: str) -> None:
     stamp = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{stamp}] {msg}", flush=True)
+    hud(type="log", text=msg)
 
 
 def speak(text: str) -> None:
@@ -204,9 +306,12 @@ def speak(text: str) -> None:
             url = HA_URL + url
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             f.write(urllib.request.urlopen(url, timeout=15).read())
+        hud(type="state", state="speaking")
         subprocess.run(PLAYER + [f.name], check=False)
     except Exception as e:
         log(f"(couldn't speak the result: {e})")
+    finally:
+        hud(type="state", state="idle")
 
 
 def save_reel(url: str) -> None:
@@ -217,6 +322,7 @@ def save_reel(url: str) -> None:
         f.write(f"{stamp} {url}\n")
     count = sum(1 for line in REELS_INBOX.open() if line.strip())
     log(f"Reel saved ({count} waiting): {url[:70]}")
+    hud(type="queue", **queue_counts(), last="reel " + datetime.datetime.now().strftime("%H:%M"))
 
 
 def fetch_reel(url: str, n: int) -> dict:
@@ -282,10 +388,12 @@ def prepare_reels() -> tuple[int, int]:
         parts = line.split(None, 1)
         date, url = (parts if len(parts) == 2 else ("", parts[0]))
         log(f"Reel {n}/{len(lines)}: fetching...")
+        stage(0)
         info = fetch_reel(url, n)
         transcript = ""
         if info["audio"]:
             log(f"Reel {n}: transcribing (local)...")
+            stage(1)
             try:
                 transcript = transcribe(info["audio"])
                 done += 1
@@ -365,7 +473,9 @@ def run_digest() -> str:
     for stale in list(digests.glob("reel-digest*.md")) + list(digests.glob("reel-digest*.html")):
         if stale.stem in ("reel-digest", f"reel-digest-{today}"):  # would confuse this run
             stale.rename(digests / f"{stale.stem}-prev{stamp}{stale.suffix}")
+    stage(2)
     summary = run_agent(DIGEST_PROMPT.replace("TODAY", today), f"reel digest ({total} reels)", REELS_DIR)
+    stage(3)
     md = digests / f"reel-digest-{today}.md"
     if not md.exists():  # agent used a different name? take the newest digest it just wrote
         fresh = [p for p in REELS_DIR.rglob("reel-digest*.md") if p.stat().st_mtime >= started]
@@ -379,6 +489,7 @@ def run_digest() -> str:
     except Exception as e:
         log(f"(Word file failed: {e})")
         docx = None
+    stage(4)
     try:
         send_email(f"Reel digest - {today} ({total} reels)",
                    md.read_text() + "\n\n(Word version attached)", [docx] if docx else [])
@@ -394,15 +505,32 @@ class PhotoDrop(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a, **k):  # keep the terminal clean
         pass
 
-    def do_GET(self):
-        body = b"Jarvis photo drop is up. POST an image to /photo"
-        self.send_response(200); self.send_header("Content-Type", "text/plain")
+    def _reply(self, code: int, body: bytes, ctype: str = "text/plain") -> None:
+        self.send_response(code); self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/nucleus", "/index.html", "/jarvis-nucleus.html"):
+            if NUCLEUS_FILE.exists():
+                self._reply(200, NUCLEUS_FILE.read_bytes(), "text/html; charset=utf-8")
+            else:
+                self._reply(404, b"jarvis-nucleus.html is missing next to the bridge")
+            return
+        self._reply(200, b"Jarvis bridge is up. The Nucleus is at /  --  POST an image to /photo")
+
     def do_POST(self):
-        if not self.path.startswith("/photo"):
-            self.send_response(404); self.end_headers(); return
         data = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.path.startswith("/event"):  # the ears (or anything on the LAN) reporting a moment
+            try:
+                event = json.loads(data or b"{}")
+                if isinstance(event, dict) and event.get("type"):
+                    HUB.emit(event)
+            except ValueError:
+                pass
+            self._reply(200, b"ok"); return
+        if not self.path.startswith("/photo"):
+            self._reply(404, b"not found"); return
         if data[:8] == b"\x89PNG\r\n\x1a\n":
             ext = ".png"
         elif data[:3] == b"\xff\xd8\xff":
@@ -417,9 +545,8 @@ class PhotoDrop(http.server.BaseHTTPRequestHandler):
         (inbox / name).write_bytes(data)
         waiting = sum(1 for f in inbox.iterdir() if f.is_file() and not f.name.startswith("."))
         log(f"Screenshot received ({len(data)//1024} KB, {waiting} waiting)")
-        body = b"saved"
-        self.send_response(200); self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        hud(type="queue", **queue_counts(), last="screenshot " + datetime.datetime.now().strftime("%H:%M"))
+        self._reply(200, b"saved")
 
 
 def start_photo_drop() -> None:
@@ -497,6 +624,7 @@ def run_recruiting() -> str:
         return "I cannot email the recruiting digest yet, sir. The Gmail app password file is missing."
     if not (RECRUIT_DIR / "voice-guide.md").exists():
         return "The recruiting folder is not set up yet, sir."
+    stage(0)
     n = collect_screenshots()
     if n == 0:
         return "No new screenshots to process, sir. Share some from your phone first."
@@ -504,7 +632,9 @@ def run_recruiting() -> str:
     started = datetime.datetime.now().timestamp()
     digests = RECRUIT_DIR / "digests"
     digests.mkdir(parents=True, exist_ok=True)
+    stage(1)
     summary = run_agent(RECRUIT_PROMPT.replace("TODAY", today), f"recruiting digest ({n} screenshots)", RECRUIT_DIR)
+    stage(2)
     md = digests / f"recruiting-digest-{today}.md"
     if not md.exists():
         fresh = [p for p in RECRUIT_DIR.rglob("recruiting-digest*.md") if p.stat().st_mtime >= started]
@@ -525,6 +655,7 @@ def run_recruiting() -> str:
         attachments.append(xlsx)
     except Exception as e:
         log(f"(Excel tracker failed: {e})")
+    stage(3)
     try:
         send_email(f"Recruiting digest - {today} ({n} screenshots)",
                    md.read_text() + "\n\n(Word digest and Excel tracker attached)", attachments)
@@ -572,6 +703,12 @@ def run_agent(prompt: str, label: str, workdir: pathlib.Path) -> str:
     return summary
 
 
+def begin(name: str, stages: list) -> None:
+    TASK["name"], TASK["stages"] = name, stages
+    hud(type="task", phase="start", name=name, stages=stages)
+    hud(type="state", state="working", sub=name)
+
+
 def run_task(task: str) -> str:
     """One voice task -> the full sentence Jarvis should say when it is done."""
     words = task.lower()
@@ -579,11 +716,113 @@ def run_task(task: str) -> str:
     # voice hears "reel" as "real" half the time, so "digest" alone is enough
     if any(w in words for w in ("recruit", "cruit", "screenshot", "screen shot", "photo",
                                 "camera", "linkedin", "job")):
+        begin("recruiting digest", ["Collecting", "Agent", "Writing", "Email", "Spoken"])
         return run_recruiting()
     if "digest" in words or (("reel" in words or "real" in words) and "summar" in words):
+        begin("reel digest", ["Fetching", "Transcribing", "Agent", "Writing", "Email", "Spoken"])
         return run_digest()
+    begin(task[:60], ["Agent", "Spoken"])
     summary = run_agent(PROMPT_TEMPLATE.format(task=task), task, GENERIC_DIR)
     return "Task complete, sir. " + summary
+
+
+def do_task(task: str) -> None:
+    """Run one task start to finish (blocking): task -> stages -> spoken result -> Nucleus."""
+    if not BUSY.acquire(blocking=False):
+        hud(type="toast", text="one task at a time")
+        return
+    try:
+        spoken = run_task(task)
+        stage(len(TASK["stages"]) - 1)
+        speak(spoken)
+        hud(type="task", phase="done", name=TASK["name"], stages=TASK["stages"], summary=spoken)
+    except Exception as e:
+        log(f"Task failed: {e}")
+        hud(type="task", phase="error", message=str(e)[:160])
+    finally:
+        hud(type="queue", **queue_counts())
+        BUSY.release()
+
+
+def ha_converse(text: str) -> str:
+    """Send a typed sentence through the same Jarvis agent voice uses. Returns the reply."""
+    req = urllib.request.Request(
+        f"{HA_URL}/api/conversation/process",
+        data=json.dumps({"text": text, "language": "en", "agent_id": AGENT_ID}).encode(),
+        headers={"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        out = json.loads(r.read())
+    speech = out.get("response", {}).get("speech", {}).get("plain", {}).get("speech", "")
+    return speech or "Done, sir."
+
+
+def do_say(text: str) -> None:
+    """A typed command from the Nucleus: Jarvis answers and speaks, as if you had said it."""
+    if not BUSY.acquire(blocking=False):
+        hud(type="toast", text="one thing at a time")
+        return
+    try:
+        hud(type="state", state="thinking")
+        reply = ha_converse(text)
+        hud(type="reply", text=reply)
+        speak(reply)
+    except Exception as e:
+        log(f"(typed command failed: {e})")
+        hud(type="reply", text=f"I could not reach Home Assistant for that, sir. ({str(e)[:60]})")
+        hud(type="state", state="idle")
+    finally:
+        BUSY.release()
+
+
+async def hud_command(msg: dict) -> None:
+    """A click or typed line on the Nucleus."""
+    kind = msg.get("type")
+    if kind == "say" and msg.get("text"):
+        await asyncio.to_thread(do_say, str(msg["text"])[:300])
+    elif kind == "run" and msg.get("task"):
+        await asyncio.to_thread(do_task, str(msg["task"])[:200])
+
+
+def read_room() -> dict:
+    """What Home Assistant knows about the room right now, in Nucleus shape."""
+    req = urllib.request.Request(f"{HA_URL}/api/states", headers={"Authorization": f"Bearer {HA_TOKEN}"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        states = json.loads(r.read())
+    room = {"type": "room", "ha": True, "board": None}
+    for s in states:
+        eid, st, attrs = s.get("entity_id", ""), s.get("state"), s.get("attributes", {})
+        if "jarvis_desk" not in eid:
+            continue
+        try:
+            if eid.startswith("sensor.") and eid.endswith("room_temperature"):
+                room["temp"] = float(st)
+            elif eid.startswith("sensor.") and eid.endswith("room_humidity"):
+                room["hum"] = float(st)
+            elif eid.startswith("light.") and eid.endswith("desk_strip"):
+                room["board"] = st != "unavailable"
+                room["strip"] = {"on": st == "on", "rgb": attrs.get("rgb_color") or [0, 0, 0],
+                                 "effect": attrs.get("effect") or "None"}
+            elif eid.startswith("binary_sensor.") and eid.endswith("room_motion"):
+                room["motion"] = st == "on"
+            elif eid.startswith("switch.") and eid.endswith("motion_mode"):
+                room["motion_mode"] = st == "on"
+            elif eid.startswith("number.") and eid.endswith("night_starts"):
+                room.setdefault("night", [23, 8])[0] = int(float(st))
+            elif eid.startswith("number.") and eid.endswith("night_ends"):
+                room.setdefault("night", [23, 8])[1] = int(float(st))
+        except (TypeError, ValueError):
+            pass
+    return room
+
+
+async def room_loop() -> None:
+    while True:
+        try:
+            HUB.emit(await asyncio.to_thread(read_room))
+        except Exception:
+            HUB.emit({"type": "room", "ha": False})
+        await asyncio.sleep(ROOM_POLL)
 
 
 async def main() -> None:
@@ -591,6 +830,9 @@ async def main() -> None:
         sys.exit(f"Missing {KEY_FILE}. Put your Anthropic API key in it.")
     ws_url = HA_URL.replace("http", "ws", 1) + "/api/websocket"
     start_photo_drop()
+    await HUB.serve()
+    asyncio.ensure_future(room_loop())
+    hud(type="queue", **queue_counts())
     while True:
         try:
             async with websockets.connect(ws_url, max_size=None) as ws:
@@ -604,7 +846,7 @@ async def main() -> None:
                 await ws.send(json.dumps({"id": 2, "type": "subscribe_events",
                                           "event_type": "jarvis_reel"}))
                 await ws.recv()
-                log("Bridge v6 ready (tasks + reel digest + recruiting digest). "
+                log(f"Bridge {VERSION} ready (tasks + digests + Nucleus). "
                     "Say \"Hey Jarvis, task: ...\"  Ctrl+C to stop.")
                 async for raw in ws:
                     msg = json.loads(raw)
@@ -620,8 +862,7 @@ async def main() -> None:
                     task = (data.get("task") or "").strip()
                     if not task:
                         continue
-                    spoken = await asyncio.to_thread(run_task, task)
-                    await asyncio.to_thread(speak, spoken)
+                    await asyncio.to_thread(do_task, task)
         except (OSError, websockets.WebSocketException) as e:
             log(f"Lost Home Assistant ({e}); retrying in 10 s...")
             await asyncio.sleep(10)

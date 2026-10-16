@@ -12,7 +12,8 @@ Everything you need to start, stop, check, and fix Jarvis. Written for future-me
 
 ```
 ~/jarvis/scripts/start-ears.sh      # tab 1: "Hey Jarvis" listener
-~/jarvis/scripts/start-bridge.sh    # tab 2: task bridge + digests + photo drop
+~/jarvis/scripts/start-bridge.sh    # tab 2: task bridge + digests + photo drop + Nucleus events
+~/jarvis/scripts/start-nucleus.sh   # the face, full screen in Chrome (http://localhost:8802/)
 ```
 (or `ears` if the alias is set: `echo "alias ears='~/jarvis/scripts/start-ears.sh'" >> ~/.zshrc`)
 

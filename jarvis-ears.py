@@ -7,15 +7,23 @@ the microphone; otherwise the system default. The reply plays through the system
 output (set the S330 as default output in Sound settings on the Mac, or via the installer
 on the Pi). Needs: ha-token.txt next to this file. Stop with Ctrl+C.
 
+It also tells the Nucleus (the face on the monitor) what is happening: listening,
+what it heard, Jarvis's reply, speaking. Those go as tiny POSTs to the task bridge
+(HUD_URL); if the bridge is not running they are silently dropped. When the ears
+run on the Pi, set JARVIS_HUD_URL to the Mac, e.g.
+http://Adils-MacBook-Air-2.local:8802/event
+
 On the Pi it runs as a service: see pi/install-ears.sh.
 """
 import asyncio
 import json
+import os
 import pathlib
 import platform
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -30,6 +38,7 @@ HA_URL = "http://jarvis-pi.local:8123"  # or "http://192.168.0.213:8123"
 EARS_DEVICE = "S330"  # part of the mic's name to prefer (Anker PowerConf S330); default mic if absent
 WAKE_THRESHOLD = 0.5  # lower = wakes more easily (and by mistake more often)
 MAX_LISTEN_SECONDS = 8  # longest command it will listen to
+HUD_URL = os.environ.get("JARVIS_HUD_URL", "http://127.0.0.1:8802/event")  # the bridge's event door
 # ------------------------------------
 
 IS_MAC = platform.system() == "Darwin"
@@ -67,6 +76,18 @@ def make_chime() -> None:
     pcm = (tone * env * 12000).astype(np.int16)
     with wave.open(CHIME, "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes(pcm.tobytes())
+
+
+def hud(**event) -> None:
+    """Tell the Nucleus about a moment. Fire-and-forget; never slows the ears down."""
+    def post():
+        try:
+            req = urllib.request.Request(HUD_URL, data=json.dumps(event).encode(),
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=1.5).read()
+        except Exception:
+            pass
+    threading.Thread(target=post, daemon=True).start()
 
 
 def drain(q: asyncio.Queue) -> None:
@@ -134,14 +155,17 @@ async def ask_home_assistant(token: str, q: asyncio.Queue) -> None:
                 elif kind == "stt-end":
                     stop.set()
                     print("  You:   ", data["stt_output"]["text"])
+                    hud(type="heard", text=data["stt_output"]["text"])
                 elif kind == "intent-end":
                     speech = data["intent_output"]["response"]["speech"].get("plain", {}).get("speech", "")
                     print("  Jarvis:", speech)
+                    hud(type="reply", text=speech)
                 elif kind == "tts-end":
                     tts_url = data["tts_output"]["url"]
                 elif kind == "error":
                     stop.set()
                     print("  Error: ", data.get("message"))
+                    hud(type="log", text="ears: " + str(data.get("message"))[:80])
                 elif kind == "run-end":
                     break
         finally:
@@ -153,6 +177,7 @@ async def ask_home_assistant(token: str, q: asyncio.Queue) -> None:
             tts_url = HA_URL + tts_url
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             f.write(urllib.request.urlopen(tts_url, timeout=15).read())
+        hud(type="state", state="speaking")
         play(f.name)
 
 
@@ -195,12 +220,15 @@ async def main() -> None:
             scores = wake.predict(np.frombuffer(chunk, dtype=np.int16))
             if max(scores.values()) >= WAKE_THRESHOLD:
                 print("Heard \"Hey Jarvis\".")
+                hud(type="state", state="listening")
                 play(CHIME)
                 drain(q)  # skip the chime itself
                 try:
                     await ask_home_assistant(token, q)
                 except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as e:
                     print("  Couldn't reach Home Assistant:", e)
+                    hud(type="log", text="ears: couldn't reach Home Assistant")
+                hud(type="state", state="idle")
                 wake.reset()
                 drain(q)
                 print("Listening.")

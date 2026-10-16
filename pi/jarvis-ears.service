@@ -12,6 +12,8 @@ ExecStart=/home/adil/jarvis-ears-env/bin/python3 /home/adil/jarvis/jarvis-ears.p
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# The Nucleus runs on the Mac; the ears tell it what they hear.
+Environment=JARVIS_HUD_URL=http://Adils-MacBook-Air-2.local:8802/event
 
 [Install]
 WantedBy=multi-user.target

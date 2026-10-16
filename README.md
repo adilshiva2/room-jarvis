@@ -30,6 +30,7 @@ flowchart LR
     EARS["jarvis-ears.py<br/>wake word 'Hey Jarvis'"]
     BRIDGE["jarvis-tasks.py<br/>task bridge + digests"]
     AGENT["Claude agent<br/>(claude -p, sandboxed folder)"]
+    NUC["jarvis-nucleus.html<br/>the Nucleus (monitor)"]
   end
   PHONE["iPhone<br/>HA app · Shortcuts"]
   ESP <-- "ESPHome native API<br/>(encrypted)" --> HA
@@ -38,6 +39,8 @@ flowchart LR
   HA --> W & P
   HA -- "conversation" --> SONNET["Claude Sonnet 5.5<br/>(Anthropic API)"]
   HA -- "events" --> BRIDGE
+  BRIDGE -- "live events<br/>(websocket)" --> NUC
+  EARS -- "moments" --> BRIDGE
   BRIDGE --> AGENT
   AGENT -- "spoken summary<br/>+ email" --> BRIDGE
   PHONE -- "share sheet:<br/>reels, screenshots" --> HA & BRIDGE
@@ -58,13 +61,14 @@ Three tiers decide where a request goes, cheapest first:
 |---|---|
 | `jarvis-node1.yaml` | The ESP32's program (ESPHome): strip, sensor, motion rule with night window and cooldowns, Jarvis light effects. Secrets come from an untracked `secrets.yaml`. |
 | `jarvis-ears.py` | Wake-word listener. Streams the mic to Home Assistant's voice pipeline and plays the answer. Runs on the Mac now, moving to the Pi + S330. |
-| `jarvis-tasks.py` | The task bridge. Listens for Home Assistant events, runs a Claude agent for voice tasks, and runs the reel digest and recruiting digest pipelines (transcribe → write → Word doc → email). Also hosts the phone photo drop. |
+| `jarvis-tasks.py` | The task bridge. Listens for Home Assistant events, runs a Claude agent for voice tasks, and runs the reel digest and recruiting digest pipelines (transcribe → write → Word doc → email). Also hosts the phone photo drop, serves the Nucleus and streams live events to it. |
+| `jarvis-nucleus.html` | The Nucleus: Jarvis's face on the monitor. A living core that reacts to the room's sound, shows what was heard and answered, turns into a progress ring while a task runs, and carries room telemetry, queues and clickable actions. Zero dependencies; `?demo=1` runs it standalone. |
 | `jarvis-doctor.py` | Health checker on the Pi: board, containers, HA entities, disk, temperature. Restarts what it safely can, logs everything. |
 | `jarvis-server.py` + `jarvis-hud.html` | The HUD: a sci-fi control screen for phone or monitor, with a PIN, served from the Pi. |
 | `jarvis-study.py` | Pulls a bCourses class into a folder the agent can read. |
 | `home-assistant/automations.yaml` | The six Home Assistant automations (voice modes, task bridge, reel catcher), as reference YAML. |
 | `shortcuts/` | How the three iPhone shortcuts are built. |
-| `scripts/` | One-command starts for the ears, the bridge, a board flash, and a Doctor report. |
+| `scripts/` | One-command starts for the ears, the bridge, the Nucleus, a board flash, and a Doctor report. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Runbook](docs/RUNBOOK.md) · [Changelog](docs/CHANGELOG.md) · [Learning notes](docs/learning/) on every layer. |
 
 ## Stack

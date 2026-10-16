@@ -2,6 +2,15 @@
 
 Dated, in plain words. Older history (Oct 1-13) was squashed when secrets were removed from git on Oct 14.
 
+## 2026-10-15
+- The Nucleus: `jarvis-nucleus.html`, Jarvis's face on the monitor. Reacts to the room's sound (mic), shows listening / heard / reply / speaking, becomes a progress ring during tasks (stages), room telemetry, queues, clickable tiles and a typed command line. Keys: F fullscreen, D demo, / type.
+- Bridge v7: serves the Nucleus (port 8802), streams events to it (ws 8803), accepts `/event` posts from the ears, takes typed commands (Home Assistant conversation API) and tile clicks (tasks), polls room telemetry, one task at a time.
+- Ears report their moments to the Nucleus (`JARVIS_HUD_URL`, defaults to the local bridge).
+- S330 speakerphone is Jarvis's voice, on the Mac (the Pi and a powered USB-A hub both brown out on its start-up surge; Pi move waits for a 3 A-capable part). AnkerWork firmware updated.
+- Home Assistant automation "Jarvis strip - colour beats effect": a spoken colour now overrides a running effect.
+- Pi doctor reads `board-password.txt`. Board web page can hang while everything else keeps working; power-cycle fixes it.
+- Clean one-commit history pushed; repo public.
+
 ## 2026-10-14
 - Reel digest v2: local transcription (yt-dlp + faster-whisper), insight-focused prompt, Word doc, emailed via Gmail SMTP, spoken takeaways.
 - Recruiting digest: "Photo to Jarvis" shortcut → phone POSTs screenshots to the Mac (port 8802) → agent reads them, appends tracker rows, drafts outreach from a voice guide built from five real messages, emails Word digest + Excel tracker.
